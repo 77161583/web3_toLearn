@@ -6,12 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"github.com/davecgh/go-spew/spew"
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/gin-gonic/gin"
 	hdwallet "github.com/miguelmota/go-ethereum-hdwallet"
+	"golang.org/x/crypto/sha3"
 	"log"
 	"math/big"
 	"net/http"
@@ -40,6 +43,7 @@ func (u *UserHandler) RegisterRoutes(server *gin.Engine) {
 	ug.GET("/checkBlock", u.CheckBlock)
 	ug.GET("/checkTransactions", u.CheckTransactions)
 	ug.GET("/transferETH", u.TransferETH)
+	ug.GET("/tokenTransfer", u.TokenTransfer)
 }
 
 // 连接到 Infura 通过构造函数初始化的客户端
@@ -321,7 +325,7 @@ func (u *UserHandler) TransferETH(ctx *gin.Context) {
 }
 
 // 代币转账
-func (u *UserHandler) TokenTransfer() {
+func (u *UserHandler) TokenTransfer(ctx *gin.Context) {
 	// 使用 crypto.HexToECDSA 加载私钥. 返回一个 privateKey，用于签名交易。
 	privateKey, err := crypto.HexToECDSA("6701523d74c4790a71***d80651bf31b9fc24d0232f7f2662ea02411****")
 	if err != nil {
@@ -342,9 +346,70 @@ func (u *UserHandler) TokenTransfer() {
 	}
 	//交易细节
 	value := big.NewInt(0) // in wei (1 eth)
-	gasLimit := uint64(21000)
+	//gasLimit := uint64(21000)
 	gasPrice, err := u.ethClient.SuggestGasPrice(context.Background())
 	if err != nil {
 		log.Fatal(err)
 	}
+	toAddress := common.HexToAddress("0xCA690381a3Ea245BfA6a3DE8823133260bCA572A")
+	tokenAddress := common.HexToAddress("0xd9145CCE52D386f254917e481eB44e9943F39138")
+	//生成 ERC-20 transfer 方法的函数签名
+	/**
+	transfer(address,uint256) 是 ERC-20 合约中的 transfer 方法，用于发送代币。
+	使用 sha3.NewKeccak256 计算方法签名的 Keccak-256 哈希值。methodID 是哈希值的前 4 个字节（这是以太坊 ABI 编码的规则，用于标识方法）。
+	*/
+	transferFnSignature := []byte("transfer(address,uint256)")
+	hash := sha3.NewLegacyKeccak256()
+	hash.Write(transferFnSignature)
+	methodID := hash.Sum(nil)[:4]
+	fmt.Println(hexutil.Encode(methodID))
+	//将接收地址和转账金额填充为 32 字节
+	paddedAddress := common.LeftPadBytes(toAddress.Bytes(), 32)
+	fmt.Println(hexutil.Encode(paddedAddress))
+	amount := new(big.Int)
+	amount.SetString("1000000000000000000000", 10) // 1000 tokens
+	paddedAmount := common.LeftPadBytes(amount.Bytes(), 32)
+	fmt.Println(hexutil.Encode(paddedAmount))
+	//构造交易数据
+	var data []byte
+	data = append(data, methodID...)
+	data = append(data, paddedAddress...)
+	data = append(data, paddedAmount...)
+	//估算 Gas Limit
+	/**
+	使用 EstimateGas 方法估算执行这笔交易所需要的 Gas 数量。
+	ethereum.CallMsg 包含了目标地址和数据，EstimateGas 会计算并返回适当的 Gas 限制。
+	*/
+	gasLimit, err := u.ethClient.EstimateGas(context.Background(), ethereum.CallMsg{
+		To:   &toAddress,
+		Data: data,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("gas 总量", gasLimit)
+	//构造并签名交易
+	/**
+	使用 types.NewTransaction 创建一个新的交易，指定交易的 nonce、目标地址（ERC-20 合约地址）、金额（0 ETH）、Gas 限制、Gas 价格和交易数据（即调用合约的 transfer 方法）。
+	使用 types.SignTx 方法，使用私钥对交易进行签名。
+	*/
+	tx := types.NewTransaction(nonce, tokenAddress, value, gasLimit, gasPrice, data)
+
+	chainID, err := u.ethClient.NetworkID(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	signedTx, err := types.SignTx(tx, types.NewEIP155Signer(chainID), privateKey)
+	if err != nil {
+		log.Fatal(err)
+	}
+	//发送交易 使用 client.SendTransaction 将已签名的交易广播到网络中。
+	err = u.ethClient.SendTransaction(context.Background(), signedTx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	//输出交易哈希
+	fmt.Printf("tx sent: %s", signedTx.Hash().Hex()) //
+
 }
