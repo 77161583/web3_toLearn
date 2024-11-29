@@ -327,7 +327,7 @@ func (u *UserHandler) TransferETH(ctx *gin.Context) {
 // 代币转账
 func (u *UserHandler) TokenTransfer(ctx *gin.Context) {
 	// 使用 crypto.HexToECDSA 加载私钥. 返回一个 privateKey，用于签名交易。
-	privateKey, err := crypto.HexToECDSA("6701523d74c4790a71***d80651bf31b9fc24d0232f7f2662ea02411****")
+	privateKey, err := crypto.HexToECDSA("b193f6267749e2d500d9dcd0d17fcd0454703f3681ada27f299b91013016e817")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -352,7 +352,7 @@ func (u *UserHandler) TokenTransfer(ctx *gin.Context) {
 		log.Fatal(err)
 	}
 	toAddress := common.HexToAddress("0xCA690381a3Ea245BfA6a3DE8823133260bCA572A")
-	tokenAddress := common.HexToAddress("0xd9145CCE52D386f254917e481eB44e9943F39138")
+	tokenAddress := common.HexToAddress("0x89bEaeaEb2788A87f49bd355A5745A7b444Bb78b")
 	//生成 ERC-20 transfer 方法的函数签名
 	/**
 	transfer(address,uint256) 是 ERC-20 合约中的 transfer 方法，用于发送代币。
@@ -367,7 +367,7 @@ func (u *UserHandler) TokenTransfer(ctx *gin.Context) {
 	paddedAddress := common.LeftPadBytes(toAddress.Bytes(), 32)
 	fmt.Println(hexutil.Encode(paddedAddress))
 	amount := new(big.Int)
-	amount.SetString("1000000000000000000000", 10) // 1000 tokens
+	amount.SetString("100000000000000000000", 10) // 1000 tokens
 	paddedAmount := common.LeftPadBytes(amount.Bytes(), 32)
 	fmt.Println(hexutil.Encode(paddedAmount))
 	//构造交易数据
@@ -388,6 +388,10 @@ func (u *UserHandler) TokenTransfer(ctx *gin.Context) {
 		log.Fatal(err)
 	}
 	fmt.Println("gas 总量", gasLimit)
+	fmt.Println("nonce", nonce)
+	fmt.Println("交易细节", value)
+	fmt.Println("gasPrice", gasPrice)
+	fmt.Println("tokenAddress", tokenAddress)
 	//构造并签名交易
 	/**
 	使用 types.NewTransaction 创建一个新的交易，指定交易的 nonce、目标地址（ERC-20 合约地址）、金额（0 ETH）、Gas 限制、Gas 价格和交易数据（即调用合约的 transfer 方法）。
@@ -411,5 +415,4 @@ func (u *UserHandler) TokenTransfer(ctx *gin.Context) {
 	}
 	//输出交易哈希
 	fmt.Printf("tx sent: %s", signedTx.Hash().Hex()) //
-
 }
