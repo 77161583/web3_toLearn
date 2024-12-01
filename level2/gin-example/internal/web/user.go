@@ -324,10 +324,10 @@ func (u *UserHandler) TransferETH(ctx *gin.Context) {
 	*/
 }
 
-// 代币转账
+// TokenTransfer 代币转账
 func (u *UserHandler) TokenTransfer(ctx *gin.Context) {
 	// 使用 crypto.HexToECDSA 加载私钥. 返回一个 privateKey，用于签名交易。
-	privateKey, err := crypto.HexToECDSA("b193f6267749e2d500d9dcd0d17fcd0454703f3681ada27f299b91013016e817")
+	privateKey, err := crypto.HexToECDSA("6701523d74c4790a71f4e8d1d80651bf31b9fc24d0232f7f2662ea02411e9b01")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -352,7 +352,7 @@ func (u *UserHandler) TokenTransfer(ctx *gin.Context) {
 		log.Fatal(err)
 	}
 	toAddress := common.HexToAddress("0xCA690381a3Ea245BfA6a3DE8823133260bCA572A")
-	tokenAddress := common.HexToAddress("0x89bEaeaEb2788A87f49bd355A5745A7b444Bb78b")
+	tokenAddress := common.HexToAddress("0xd027fE24CA0043362797bca72DE7DF471c3870ac")
 	//生成 ERC-20 transfer 方法的函数签名
 	/**
 	transfer(address,uint256) 是 ERC-20 合约中的 transfer 方法，用于发送代币。
@@ -365,9 +365,13 @@ func (u *UserHandler) TokenTransfer(ctx *gin.Context) {
 	fmt.Println(hexutil.Encode(methodID))
 	//将接收地址和转账金额填充为 32 字节
 	paddedAddress := common.LeftPadBytes(toAddress.Bytes(), 32)
-	fmt.Println(hexutil.Encode(paddedAddress))
-	amount := new(big.Int)
-	amount.SetString("100000000000000000000", 10) // 1000 tokens
+	fmt.Println("paddedAddress", hexutil.Encode(paddedAddress))
+	//设置代币数量
+	amountTokens := big.NewInt(100)
+	decimals := big.NewInt(18)
+	// 转换成最小单位 wei
+	multiplier := new(big.Int).Exp(big.NewInt(10), decimals, nil)
+	amount := new(big.Int).Mul(amountTokens, multiplier)
 	paddedAmount := common.LeftPadBytes(amount.Bytes(), 32)
 	fmt.Println(hexutil.Encode(paddedAmount))
 	//构造交易数据
