@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/davecgh/go-spew/spew"
-	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -327,7 +326,7 @@ func (u *UserHandler) TransferETH(ctx *gin.Context) {
 // TokenTransfer 代币转账
 func (u *UserHandler) TokenTransfer(ctx *gin.Context) {
 	// 使用 crypto.HexToECDSA 加载私钥. 返回一个 privateKey，用于签名交易。
-	privateKey, err := crypto.HexToECDSA("6701523d74c4790a71f4e8d1d80651bf31b9fc24d0232f7f2662ea02411e9b01")
+	privateKey, err := crypto.HexToECDSA("6701523d74c4790a71f4e8d/bf31b9fc24d0232f7f2662ea02411e9b01")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -352,7 +351,7 @@ func (u *UserHandler) TokenTransfer(ctx *gin.Context) {
 		log.Fatal(err)
 	}
 	toAddress := common.HexToAddress("0xCA690381a3Ea245BfA6a3DE8823133260bCA572A")
-	tokenAddress := common.HexToAddress("0xd027fE24CA0043362797bca72DE7DF471c3870ac")
+	tokenAddress := common.HexToAddress("0xfD2da79adb9109fe8fe66b5270cf2e68b59e6237")
 	//生成 ERC-20 transfer 方法的函数签名
 	/**
 	transfer(address,uint256) 是 ERC-20 合约中的 transfer 方法，用于发送代币。
@@ -384,14 +383,15 @@ func (u *UserHandler) TokenTransfer(ctx *gin.Context) {
 	使用 EstimateGas 方法估算执行这笔交易所需要的 Gas 数量。
 	ethereum.CallMsg 包含了目标地址和数据，EstimateGas 会计算并返回适当的 Gas 限制。
 	*/
-	gasLimit, err := u.ethClient.EstimateGas(context.Background(), ethereum.CallMsg{
-		To:   &toAddress,
-		Data: data,
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Println("gas 总量", gasLimit)
+	//gasLimit, err := u.ethClient.EstimateGas(context.Background(), ethereum.CallMsg{
+	//	To:   &toAddress,
+	//	Data: data,
+	//})
+	//if err != nil {
+	//	log.Fatal(err)
+	//}
+	adjustedGasLimit := uint64(60000) // 增加10%的余量
+	fmt.Println("gas 总量", adjustedGasLimit)
 	fmt.Println("nonce", nonce)
 	fmt.Println("交易细节", value)
 	fmt.Println("gasPrice", gasPrice)
@@ -401,7 +401,7 @@ func (u *UserHandler) TokenTransfer(ctx *gin.Context) {
 	使用 types.NewTransaction 创建一个新的交易，指定交易的 nonce、目标地址（ERC-20 合约地址）、金额（0 ETH）、Gas 限制、Gas 价格和交易数据（即调用合约的 transfer 方法）。
 	使用 types.SignTx 方法，使用私钥对交易进行签名。
 	*/
-	tx := types.NewTransaction(nonce, tokenAddress, value, gasLimit, gasPrice, data)
+	tx := types.NewTransaction(nonce, tokenAddress, value, adjustedGasLimit, gasPrice, data)
 
 	chainID, err := u.ethClient.NetworkID(context.Background())
 	if err != nil {
@@ -419,4 +419,8 @@ func (u *UserHandler) TokenTransfer(ctx *gin.Context) {
 	}
 	//输出交易哈希
 	fmt.Printf("tx sent: %s", signedTx.Hash().Hex()) //
+}
+
+// 订阅新区块
+func (u *UserHandler) Subscribe(ctx *gin.Context) {
 }
