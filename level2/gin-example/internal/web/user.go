@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"crypto/ecdsa"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"github.com/davecgh/go-spew/spew"
@@ -11,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/gin-gonic/gin"
 	hdwallet "github.com/miguelmota/go-ethereum-hdwallet"
 	"golang.org/x/crypto/sha3"
@@ -43,6 +45,9 @@ func (u *UserHandler) RegisterRoutes(server *gin.Engine) {
 	ug.GET("/checkTransactions", u.CheckTransactions)
 	ug.GET("/transferETH", u.TransferETH)
 	ug.GET("/tokenTransfer", u.TokenTransfer)
+	ug.GET("/subscribe", u.Subscribe)
+	ug.GET("/transactionRawCreate", u.TransactionRawCreate)
+	ug.GET("/transactionRawSendreate", u.TransactionRawSendreate)
 }
 
 // 连接到 Infura 通过构造函数初始化的客户端
@@ -421,6 +426,147 @@ func (u *UserHandler) TokenTransfer(ctx *gin.Context) {
 	fmt.Printf("tx sent: %s", signedTx.Hash().Hex()) //
 }
 
-// 订阅新区块
+// Subscribe 订阅新区块
 func (u *UserHandler) Subscribe(ctx *gin.Context) {
+	client, err := ethclient.Dial("wss://sepolia.infura.io/ws/v3/5cfcf36740804b5f92e934d6a2ba77c8")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	//创建一个新的通道，用于接收最新的区块头。
+	headers := make(chan *types.Header)
+	//SubscribeNewHead 方法用来订阅新的区块头（即区块链上新增的区块）。每当一个新区块被挖矿成功并广播到网络时，这个订阅会接收到新区块的头部信息，并将其放入 headers 通道。
+	sub, err := client.SubscribeNewHead(context.Background(), headers)
+	if err != nil {
+		log.Fatal(err)
+	}
+	//循环处理新区块头和区块信息：
+	/**
+	使用 select 语句等待 sub.Err() 和 headers 通道中的数据
+		-如果订阅发生错误（sub.Err()），则会捕获并输出错误。
+		-如果接收到新区块头（header := <-headers），则获取区块的详细信息。
+
+	*/
+	for {
+		select {
+		case err := <-sub.Err():
+			log.Fatal(err)
+		case header := <-headers:
+			fmt.Println(header.Hash().Hex())
+			block, err := client.BlockByHash(context.Background(), header.Hash())
+			if err != nil {
+				log.Fatal(err)
+			}
+			fmt.Printf("区块哈希值: %s\n", block.Hash().Hex())           // 使用 %s 输出区块哈希值，格式化为字符串
+			fmt.Printf("区块编号 (高度): %d\n", block.Number().Uint64())  // 输出区块编号
+			fmt.Printf("区块时间戳 (UNIX 时间): %d\n", block.Time())       // 输出区块的时间戳（UNIX格式）
+			fmt.Printf("区块的 Nonce: %s\n", block.Nonce())            // 输出区块的 nonce 值
+			fmt.Printf("区块中的交易数量: %d\n", len(block.Transactions())) // 输出区块中交易的数量
+		}
+	}
+}
+
+// TransactionRawCreate 构建原始交易
+func (u *UserHandler) TransactionRawCreate(ctx *gin.Context) {
+	// 使用 crypto.HexToECDSA 加载私钥. 返回一个 privateKey，用于签名交易。
+	privateKey, err := crypto.HexToECDSA("6701523d74c4790a71f4e8d1d80651bf31b9fc24d0232f7f2662ea02411e9b01")
+	if err != nil {
+		log.Fatal(err)
+	}
+	//获取公钥地址
+	publicKey := privateKey.Public()
+	publicKeyECDSA, ok := publicKey.(*ecdsa.PublicKey)
+	if !ok {
+		log.Fatal("cannot assert type: publicKey is not of type *ecdsa.PublicKey")
+	}
+	//使用 crypto.PubkeyToAddress 将公钥转化为地址，即交易的发送方地址。  如果公钥类型无法转换为 *ecdsa.PublicKey，则报错。
+	fromAddress := crypto.PubkeyToAddress(*publicKeyECDSA)
+	fmt.Println("看看地址", fromAddress)
+	//读取应该用于帐户交易的随机数。
+	/**
+	nonce 是交易的唯一标识符，用于防止重放攻击。它是发送方地址在链上的交易数量。
+	使用 PendingNonceAt 获取待处理交易的 nonce 值。
+	如果获取失败，会抛出错误。
+	*/
+	nonce, err := u.ethClient.PendingNonceAt(context.Background(), fromAddress)
+	if err != nil {
+		log.Fatal(err)
+	}
+	//设置交易细节
+	/**
+	value 设置为 0.01 ETH（10,000,000,000,000,000 wei）。
+	gasLimit 设置为 21,000 wei，这是标准的转账交易的 Gas 限制。
+	gasPrice 使用 ethClient.SuggestGasPrice 获取当前网络建议的 Gas 价格。
+	*/
+	value := big.NewInt(10000000000000000) // in wei (1 eth)
+	gasLimit := uint64(60000)
+	gasPrice, err := u.ethClient.SuggestGasPrice(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
+	// 设置目标地址 将 ETH 发送给谁。
+	toAddress := common.HexToAddress("0xCA690381a3Ea245BfA6a3DE8823133260bCA572A")
+	tx := types.NewTransaction(nonce, toAddress, value, gasLimit, gasPrice, nil)
+	chainID, err := u.ethClient.NetworkID(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
+	// 使用私钥对交易进行签名，签名后交易变为一个“已签名”交易对象。
+	signedTx, err := types.SignTx(tx, types.NewEIP155Signer(chainID), privateKey)
+	if err != nil {
+		log.Fatal(err)
+	}
+	// 获取 RLP 编码的交易数据  将签名后的交易序列化为 RLP 编码格式的字节数据
+	rawTxBytes, err := signedTx.MarshalBinary()
+	if err != nil {
+		log.Fatal(err)
+	}
+	// 将 RLP 编码的交易数据转换为十六进制字符串
+	// 使用 hex.EncodeToString 将 RLP 编码的字节数据转换为十六进制字符串 rawTxHex。这就是交易的原始数据，它可以用于广播到以太坊网络
+	rawTxHex := hex.EncodeToString(rawTxBytes)
+	// 打印交易的 RLP 编码
+	fmt.Printf("RLP 编码 %s", rawTxHex) //f86e128405364ab1...68750c50fe5c3029e
+	/**
+	流程总结：
+	加载私钥：通过 crypto.HexToECDSA 将十六进制私钥字符串转换为 ecdsa.PrivateKey 对象。
+	获取公钥地址：通过 privateKey.Public() 获取公钥并转换为地址。
+	获取交易 nonce：使用 ethClient.PendingNonceAt 获取待处理的交易 nonce，确保每个交易有唯一标识符。
+	设置交易参数：定义交易的金额、Gas 限制、Gas 价格、目标地址等。
+	创建交易对象：使用 types.NewTransaction 创建交易对象。
+	签名交易：使用 types.SignTx 和私钥对交易进行签名。
+	获取 RLP 编码：通过 signedTx.MarshalBinary 获取交易的 RLP 编码，并将其转换为十六进制字符串。
+	打印 RLP 编码：打印 RLP 编码后的交易数据，可以用于广播到以太坊网络。
+	最终，生成的 RLP 编码的交易可以用于将交易发送到以太坊网络，进行确认和执行。
+	*/
+}
+
+// TransactionRawSendreate 发送原始交易事务
+func (u *UserHandler) TransactionRawSendreate(ctx *gin.Context) {
+	// Step 1: 定义一个包含交易的原始十六进制字符串
+	rawTx := "f86e128405364ab182ea6094ca690381a3ea245bfa6a3de8823133260bca572a872386f26fc10000808401546d71a0dd3751e81dace9a108d6a560d8b54d8b944bf4043d9bcc1ccc4f4d1ae2cfd8fea06ccc5360edfe806e6a5dede994a1a72bffad6256abcda2468750c50fe5c3029e"
+	// Step 2: 将十六进制的字符串解码为字节数组
+	rawTxBytes, err := hex.DecodeString(rawTx)
+	if err != nil {
+		log.Fatal("hex.DecodeString failed: ", err)
+	}
+	// Step 3: 新建一个交易对象
+	tx := new(types.Transaction)
+	// Step 4: 使用 RLP 解码字节数据到 Transaction 对象
+	rlp.DecodeBytes(rawTxBytes, &tx)
+	// Step 5: 通过以太坊客户端发送交易
+	err = u.ethClient.SendTransaction(context.Background(), tx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	// Step 6: 打印交易哈希
+	fmt.Printf("tx sent: %s", tx.Hash().Hex())
+	/**
+	这段代码的目的是通过 RLP 编码格式的原始交易数据发送一笔交易。
+	主要流程：
+	获取原始交易数据（十六进制字符串）。
+	将十六进制字符串解码为字节数组。
+	使用 RLP 解码函数将字节数据解码为交易对象。
+	使用以太坊客户端发送解码后的交易。
+	如果交易发送成功，输出交易的哈希值。
+	*/
 }
