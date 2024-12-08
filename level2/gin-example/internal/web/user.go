@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/davecgh/go-spew/spew"
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -16,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	hdwallet "github.com/miguelmota/go-ethereum-hdwallet"
 	"golang.org/x/crypto/sha3"
+	pkgStore "level2/pkg"
 	"log"
 	"math/big"
 	"net/http"
@@ -48,6 +50,7 @@ func (u *UserHandler) RegisterRoutes(server *gin.Engine) {
 	ug.GET("/subscribe", u.Subscribe)
 	ug.GET("/transactionRawCreate", u.TransactionRawCreate)
 	ug.GET("/transactionRawSendreate", u.TransactionRawSendreate)
+	ug.GET("/contractDeploy", u.ContractDeploy)
 }
 
 // 连接到 Infura 通过构造函数初始化的客户端
@@ -570,3 +573,46 @@ func (u *UserHandler) TransactionRawSendreate(ctx *gin.Context) {
 	如果交易发送成功，输出交易的哈希值。
 	*/
 }
+
+// ContractDeploy 部署智能合约
+func (u *UserHandler) ContractDeploy(ctx *gin.Context) {
+	// 使用 crypto.HexToECDSA 加载私钥. 返回一个 privateKey，用于签名交易。
+	privateKey, err := crypto.HexToECDSA("6701523d74c4790a71f4e8d1d80651bf31b9fc24d0232f7f2662ea02411e9b01")
+	if err != nil {
+		log.Fatal(err)
+	}
+	//获取公钥地址
+	publicKey := privateKey.Public()
+	publicKeyECDSA, ok := publicKey.(*ecdsa.PublicKey)
+	if !ok {
+		log.Fatal("cannot assert type: publicKey is not of type *ecdsa.PublicKey")
+	}
+	//使用 crypto.PubkeyToAddress 将公钥转化为地址，即交易的发送方地址。  如果公钥类型无法转换为 *ecdsa.PublicKey，则报错。
+	fromAddress := crypto.PubkeyToAddress(*publicKeyECDSA)
+	fmt.Println("看看地址", fromAddress)
+	nonce, err := u.ethClient.PendingNonceAt(context.Background(), fromAddress)
+	if err != nil {
+		log.Fatal(err)
+	}
+	gasPrice, err := u.ethClient.SuggestGasPrice(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	auth := bind.NewKeyedTransactor(privateKey)
+	auth.Nonce = big.NewInt(int64(nonce))
+	auth.Value = big.NewInt(0)
+	auth.GasLimit = uint64(300000)
+	auth.GasPrice = gasPrice
+
+	input := "1.0"
+	address, tx, instance, err := pkgStore.DeployStore(auth, u.ethClient, input)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("地址", address.Hex())
+	fmt.Println("tx address", tx.Hash().Hex())
+	_ = instance
+}
+
+// 加载智能合约
