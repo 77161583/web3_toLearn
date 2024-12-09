@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/davecgh/go-spew/spew"
+	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -22,6 +24,7 @@ import (
 	"math/big"
 	"net/http"
 	"regexp"
+	"strings"
 )
 
 type UserHandler struct {
@@ -51,6 +54,10 @@ func (u *UserHandler) RegisterRoutes(server *gin.Engine) {
 	ug.GET("/transactionRawCreate", u.TransactionRawCreate)
 	ug.GET("/transactionRawSendreate", u.TransactionRawSendreate)
 	ug.GET("/contractDeploy", u.ContractDeploy)
+	ug.GET("/loadContract", u.LoadContract)
+	ug.GET("/writeContract", u.WriteContract)
+	ug.GET("/readContract", u.ReadContract)
+	ug.GET("/subLog", u.SubLog)
 }
 
 // 连接到 Infura 通过构造函数初始化的客户端
@@ -615,4 +622,175 @@ func (u *UserHandler) ContractDeploy(ctx *gin.Context) {
 	_ = instance
 }
 
-// 加载智能合约
+// LoadContract 加载智能合约 + 查询智能合约
+func (u *UserHandler) LoadContract(ctx *gin.Context) {
+	address := common.HexToAddress("0x135765bEC9A17B12841389a727092552598ed6D5")
+	instance, err := pkgStore.NewStore(address, u.ethClient)
+	if err != nil {
+		log.Fatal(err)
+	}
+	version, err := instance.Version(nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("这好像是个版本", version)
+}
+
+// WriteContract 智能合约写入
+func (u *UserHandler) WriteContract(ctx *gin.Context) {
+	privateKey, err := crypto.HexToECDSA("6701523d74c4790a71f4e8d1d80651bf31b9fc24d0232f7f2662ea02411e9b01")
+	if err != nil {
+		log.Fatal(err)
+	}
+	publicKey := privateKey.Public()
+	publicKeyECDSA, ok := publicKey.(*ecdsa.PublicKey)
+	if !ok {
+		log.Fatal("cannot assert type: publicKey is not of type *ecdsa.PublicKey")
+	}
+	fromAddress := crypto.PubkeyToAddress(*publicKeyECDSA)
+	nonce, err := u.ethClient.PendingNonceAt(context.Background(), fromAddress)
+	if err != nil {
+		log.Fatal(err)
+	}
+	gasPrice, err := u.ethClient.SuggestGasPrice(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
+	//接受私钥
+	auth := bind.NewKeyedTransactor(privateKey)
+	//设置 keyed transactor 的标准交易选项
+	auth.Nonce = big.NewInt(int64(nonce))
+	auth.Value = big.NewInt(0)
+	auth.GasLimit = uint64(300000)
+	auth.GasPrice = gasPrice
+
+	address := common.HexToAddress("0x135765bEC9A17B12841389a727092552598ed6D5")
+	instance, err := pkgStore.NewStore(address, u.ethClient)
+	if err != nil {
+		log.Fatal(err)
+	}
+	key := [32]byte{}
+	value := [32]byte{}
+	copy(key[:], []byte("foo"))
+	copy(value[:], []byte("bar"))
+
+	tx, err := instance.SetItem(auth, key, value)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("tx sent: %s\n", tx.Hash().Hex())
+	//验证键/值是否已设置，我们可以读取智能合约中的值。
+	result, err := instance.Items(nil, key)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(string(result[:]))
+}
+
+// ReadContract 读取智能合约的字节码
+func (u *UserHandler) ReadContract(ctx *gin.Context) {
+	contractAddress := common.HexToAddress("0x135765bEC9A17B12841389a727092552598ed6D5")
+
+	bytecode, err := u.ethClient.CodeAt(context.Background(), contractAddress, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println("合约的字节码：", hex.EncodeToString(bytecode))
+}
+
+// SubLog 订阅事件日志
+func (u *UserHandler) SubLog(ctx *gin.Context) {
+	client, err := ethclient.Dial("wss://sepolia.infura.io/ws/v3/5cfcf36740804b5f92e934d6a2ba77c8")
+	if err != nil {
+		log.Fatal(err)
+	}
+	contractAddress := common.HexToAddress("0x147B8eb97fD247D06C4006D269c90C1908Fb5D54")
+	query := ethereum.FilterQuery{
+		Addresses: []common.Address{contractAddress},
+	}
+	//接收事件的方式是通过 Go channel
+	logs := make(chan types.Log)
+	sub, err := client.SubscribeFilterLogs(context.Background(), query, logs)
+	if err != nil {
+		log.Fatal(err)
+	}
+	//连续循环来读入新的日志事件或订阅错误。
+	for {
+		select {
+		case err := <-sub.Err():
+			log.Fatal(err)
+		case vLog := <-logs:
+			fmt.Println(vLog)
+		}
+	}
+}
+
+// ReadLogsEvent 读取日志事件
+func (u *UserHandler) ReadLogsEvent() {
+	client, err := ethclient.Dial("wss://sepolia.infura.io/ws/v3/5cfcf36740804b5f92e934d6a2ba77c8")
+	if err != nil {
+		log.Fatal(err)
+	}
+	contractAddress := common.HexToAddress("0x147B8eb97fD247D06C4006D269c90C1908Fb5D54")
+	query := ethereum.FilterQuery{
+		//FromBlock 和 ToBlock：定义了区块范围，这里查询的是区块 2394201
+		FromBlock: big.NewInt(2394201),
+		ToBlock:   big.NewInt(2394201),
+		//定义了过滤的地址，即只关注这个智能合约地址的事件日志
+		Addresses: []common.Address{
+			contractAddress,
+		},
+	}
+	//获取指定区块范围内的日志 client.FilterLogs 用于根据 query 中指定的过滤条件，从区块链上检索日志。
+	logs, err := client.FilterLogs(context.Background(), query)
+	if err != nil {
+		log.Fatal(err)
+	}
+	//解析智能合约的 ABI
+	contractAbi, err := abi.JSON(strings.NewReader(string(pkgStore.StoreABI)))
+	if err != nil {
+		log.Fatal(err)
+	}
+	//遍历并解码事件日志
+	for _, vLog := range logs {
+		fmt.Println(vLog.BlockHash.Hex())
+		fmt.Println(vLog.BlockNumber)
+		fmt.Println(vLog.TxHash.Hex())
+		//使用 ABI 解析 vLog.Data 数据部分，并将其解码为一个结构体 event
+		event := struct {
+			Key   [32]byte
+			Value [32]byte
+		}{}
+		//将日志的数据部分解码到 event 结构体中，并通过 ItemSet 事件的名称进行匹配。
+		err := contractAbi.UnpackIntoInterface(&event, "ItemSet", vLog.Data)
+		if err != nil {
+			log.Fatal(err)
+		}
+		//打印解码出来的 Key 和 Value。假设这两者的值是 "foo" 和 "bar"，它们会被转换为字符串后打印。
+		fmt.Println(string(event.Key[:]))   // foo
+		fmt.Println(string(event.Value[:])) // bar
+		//遍历 vLog.Topics，并打印第一个主题 topics[0]。日志事件通常有多个主题（topics），其中第一个主题通常是事件的签名或索引字段。
+		var topics [4]string
+		for i := range vLog.Topics {
+			topics[i] = vLog.Topics[i].Hex()
+		}
+		fmt.Println(topics[0])
+	}
+	//计算事件签名的 Keccak256 哈希
+	/**
+	eventSignature 是事件的签名（即事件名称和参数类型），ItemSet(bytes32,bytes32) 表示一个名为 ItemSet 的事件，它有两个 bytes32 类型的参数。
+	crypto.Keccak256Hash 计算事件签名的 Keccak256 哈希值，返回的哈希是事件标识符，用于区分不同的事件。
+	*/
+	eventSignature := []byte("ItemSet(bytes32,bytes32)")
+	hash := crypto.Keccak256Hash(eventSignature)
+	fmt.Println(hash.Hex())
+	/**
+	这段代码的流程是：
+		连接到 Infura 提供的 WebSocket 服务（Sepolia 测试网络）。
+		根据指定的区块范围和合约地址，获取区块链上的日志事件。
+		使用合约的 ABI 解析日志数据，解码事件的 Key 和 Value 字段。
+		输出日志的详细信息（包括区块哈希、交易哈希、事件数据等）。
+		计算并打印 ItemSet 事件签名的 Keccak256 哈希，用于验证或识别该事件。
+	*/
+}
